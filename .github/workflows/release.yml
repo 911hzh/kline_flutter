@@ -1,0 +1,59 @@
+name: Release from develop
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-from-develop
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Tag develop and start publication
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: write
+
+    steps:
+      - name: Require develop branch
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: |
+          if [[ "$RELEASE_REF" != "refs/heads/develop" ]]; then
+            echo "::error::Select the develop branch when running this workflow."
+            exit 1
+          fi
+
+      - name: Check out selected develop commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create version tag and dispatch publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version=$(sed -n 's/^version:[[:space:]]*\([^[:space:]#]*\).*/\1/p' pubspec.yaml)
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::pubspec.yaml must contain a release version such as 0.5.2 or 0.6.0-beta.1."
+            exit 1
+          fi
+          tag="v$version"
+          if git show-ref --verify --quiet "refs/tags/$tag"; then
+            if [[ "$(git rev-list -n 1 "$tag")" != "$GITHUB_SHA" ]]; then
+              echo "::error::Tag $tag already points to a different commit. Bump the package version."
+              exit 1
+            fi
+          else
+            git tag "$tag" "$GITHUB_SHA"
+            git push origin "refs/tags/$tag"
+          fi
+          # pub.dev OIDC requires a tag ref; workflow_dispatch also works with GITHUB_TOKEN.
+          gh workflow run publish.yml --ref "$tag"
+          echo "Publication dispatched for $tag ($GITHUB_SHA). Follow Publish tagged package in Actions." >> "$GITHUB_STEP_SUMMARY"
