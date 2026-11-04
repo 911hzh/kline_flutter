@@ -1,43 +1,38 @@
 # 从 develop 手动发布
 
-将代码合并到 `develop` 后，在 GitHub 手动运行一次 `Release from develop`。
-工作流读取根目录 `pubspec.yaml` 的版本号，自动创建 tag，然后发布根包到 pub.dev
-并创建 GitHub Release。合并代码、普通 push 和推送 tag 都不会自动发布。
+仅有一个发布工作流：Release from develop。合并、普通 push 和 tag push 都不发布。
+从 develop 手动运行后，同一次运行完成分析、测试、发布预检、创建 tag、发布
+pub.dev 和创建 GitHub Release。版本号读取根目录 pubspec.yaml，不自动递增。
 
 ## 一次性配置
 
-1. 将 `release.yml` 和 `publish.yml`（均位于 `.github/workflows/`）加入 GitHub
-   默认分支，使手动触发可用；`develop` 也必须包含这两个工作流。
-2. 在 pub.dev 的 `kline_flutter` 管理页面启用 GitHub Actions 自动发布：
-   repository 填 `911hzh/kline_flutter`，tag pattern 填 `v{{version}}`。
-   不启用 Require GitHub Actions environment（当前工作流未配置 environment）。
-   使用 OIDC，无需配置 Secrets 或 PAT。若包尚未发布过，需先手动发布首个版本。
-3. 仓库需允许 GitHub Actions 运行。工作流已声明创建 tag、Release 和触发工作流
-   所需的 GITHUB_TOKEN 权限；组织策略也需允许这些权限。
+pub.dev 当前拒绝 workflow_dispatch 事件的 GitHub OIDC 发布。单次手动运行
+使用 Google 服务账号签发的 ID token，不能沿用 GitHub Actions tag 授权。
+
+1. 在 Google Cloud 项目中创建专用于发布的服务账号。
+2. 在 pub.dev 包管理页面的 Automated publishing 中启用 Google Cloud
+   服务账号发布，填写该账号的完整邮箱。
+3. 为该账号创建 JSON key；按 google-github-actions/auth 的要求，为账号自身
+   授予 Service Account Token Creator（roles/iam.serviceAccountTokenCreator），
+   并启用 IAM Service Account Credentials API。
+4. 在 GitHub 仓库 Settings → Secrets and variables → Actions 中添加
+   Repository secret：PUB_DEV_SERVICE_ACCOUNT_KEY，内容为完整 JSON key。
+   密钥不要提交到仓库或粘贴到聊天中；此密钥具备该包发布能力，应定期轮换。
+5. 将 release.yml 合并到默认分支及 develop；仓库策略需允许
+   actions/checkout、subosito/flutter-action、google-github-actions/auth，
+   并允许工作流声明的 contents: write 权限。
 
 ## 每次发布
 
-1. 在待合并代码中更新根目录 `pubspec.yaml` 的 `version` 及 `CHANGELOG.md`，
-   合并到 `develop`。使用尚未发布过的版本号，例如 `0.5.2`。
-2. 打开 GitHub → Actions → **Release from develop** → **Run workflow**。
-3. 将 **Use workflow from** 选择为 **develop**，点击 **Run workflow**。
-4. 第一阶段自动为触发时的 develop 提交创建 `v0.5.2` tag；随后在 Actions 中
-   查看自动启动的 **Publish tagged package**，等待分析、测试、发布预检、
-   pub.dev 发布及 GitHub Release 创建完成。第一阶段成功仅表示已启动发布。
+1. 更新 pubspec.yaml 的 version 和 CHANGELOG.md，合并到 develop。
+2. Actions → Release from develop → Run workflow，分支选择 develop。
+3. 等待该运行全部成功。无需手动创建 tag，运行期间 develop 新增提交不会影响本次发布。
 
-也可以使用已登录的 GitHub CLI：
+如果 v<version> 已存在且指向不同提交，流程会停止，绝不移动旧 tag。
+此前失败的 v0.5.2 仍指向旧提交，合并修复后应使用新版本（例如 0.5.3）。
+如果 pub.dev 已发布但 GitHub Release 创建失败，为同一个 tag 手动补建 Release，
+不要再次发布相同版本。
 
-```sh
-gh workflow run release.yml --repo 911hzh/kline_flutter --ref develop
-```
-
-无需手动创建或推送 tag。内部第二阶段使用 tag 上下文，以满足 pub.dev OIDC
-授权要求；两个工作流都仅使用 `workflow_dispatch`，没有 tag push 触发器。
-
-若第一阶段失败后重试，只复用指向同一提交的 tag，绝不移动已有 tag。
-若发布前检查失败，修复后请更新版本号再发布（旧 tag 仍指向原提交）。
-若 pub.dev 发布成功但 GitHub Release 创建失败，请为同一 tag 手动补建 Release，
-不要重跑发布，pub.dev 不允许重复发布同一版本。
-
-参考：[Dart 自动发布文档](https://dart.dev/tools/pub/automated-publishing)、
-[手动 tag 触发支持说明](https://github.com/dart-lang/pub-dev/issues/8507)。
+参考：
+- https://dart.dev/tools/pub/automated-publishing#publish-from-anywhere-using-a-service-account
+- https://github.com/google-github-actions/auth#service-account-key-json
