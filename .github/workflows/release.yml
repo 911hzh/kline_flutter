@@ -10,14 +10,16 @@ concurrency:
   group: release-from-develop
   cancel-in-progress: false
 
+env:
+  FLUTTER_VERSION: "3.41.9"
+
 jobs:
   prepare:
-    name: Tag develop and start publication
+    name: Validate and publish release
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     permissions:
       contents: write
-      actions: write
 
     steps:
       - name: Require develop branch
@@ -34,7 +36,35 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Create version tag and dispatch publication
+      - name: Require publishing credentials
+        env:
+          SERVICE_ACCOUNT_KEY: ${{ secrets.PUB_DEV_SERVICE_ACCOUNT_KEY }}
+        run: |
+          if [[ -z "$SERVICE_ACCOUNT_KEY" ]]; then
+            echo "::error::Configure PUB_DEV_SERVICE_ACCOUNT_KEY as described in .github/RELEASING.md."
+            exit 1
+          fi
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Get package dependencies
+        run: make get
+
+      - name: Analyze package
+        run: make analyze
+
+      - name: Test package
+        run: make test
+
+      - name: Validate package publication
+        run: flutter pub publish --dry-run
+
+      - name: Create version tag
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -54,6 +84,28 @@ jobs:
             git tag "$tag" "$GITHUB_SHA"
             git push origin "refs/tags/$tag"
           fi
-          # pub.dev OIDC requires a tag ref; workflow_dispatch also works with GITHUB_TOKEN.
-          gh workflow run publish.yml --ref "$tag"
-          echo "Publication dispatched for $tag ($GITHUB_SHA). Follow Publish tagged package in Actions." >> "$GITHUB_STEP_SUMMARY"
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+
+      - name: Authenticate service account for pub.dev
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.PUB_DEV_SERVICE_ACCOUNT_KEY }}
+          token_format: id_token
+          id_token_audience: https://pub.dev
+          id_token_include_email: true
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Publish to pub.dev
+        env:
+          PUB_TOKEN: ${{ steps.auth.outputs.id_token }}
+        run: |
+          flutter pub token add https://pub.dev --env-var PUB_TOKEN
+          flutter pub publish --force
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" --generate-notes
