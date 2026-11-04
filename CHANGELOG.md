@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2
+
+- Added a manual release workflow from `develop` that creates a version tag,
+  validates the package, publishes to pub.dev, and creates a GitHub Release.
+- Documented automated publishing setup and the manual release process.
+
 ## 0.5.0
 
 - Reorganized package and example tests to mirror the source directory
